@@ -35,6 +35,17 @@ defmodule Bolt.Sips.ConnectionSupervisor do
       |> Keyword.put(:role, role)
       |> Keyword.put(:name, via_tuple(connection_name))
 
+    # Force usage of the 'bolt' protocol for each connection
+    role_config =
+      if Keyword.get(role_config, :schema) == "neo4j" do
+        role_config
+        |> Keyword.put(:schema, "bolt")
+        |> Keyword.put(:hostname, url)
+        |> Keyword.put(:url, "bolt://" <> url)
+      else
+        role_config
+      end
+
     spec = %{
       id: connection_name,
       start: {DBConnection, :start_link, [Protocol, role_config]},

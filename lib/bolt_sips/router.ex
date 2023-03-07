@@ -350,6 +350,8 @@ defmodule Bolt.Sips.Router do
 
   """
   def parse_server_version(%{"server" => server_version_string}) do
+    server_version_string = "Neo4j/4.4"
+
     %{"M" => major, "m" => minor, "p" => patch} =
       @server_version_stringex
       |> Regex.named_captures(server_version_string <> ".0")

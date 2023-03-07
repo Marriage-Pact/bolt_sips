@@ -145,11 +145,12 @@ defmodule Bolt.Sips.Query do
     # Retrieve timeout defined in config
     prefix = Keyword.get(opts, :prefix, :default)
 
-    conf_timeout =
-      Bolt.Sips.info()
-      |> Map.get(prefix)
-      |> Map.get(:user_options)
-      |> Keyword.get(:timeout)
+    # conf_timeout =
+    #   Bolt.Sips.info()
+    #   |> Map.get(prefix)
+    #   |> Map.get(:user_options)
+    #   |> Keyword.get(:timeout)
+    conf_timeout = 15_000
 
     opts = Keyword.put_new(opts, :timeout, Keyword.get(opts, :timeout, conf_timeout))
 
