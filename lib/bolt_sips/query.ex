@@ -112,13 +112,13 @@ defmodule Bolt.Sips.Query do
     {:ok, commit!(errors, conn, statements, formatted_params, opts)}
   rescue
     e in RuntimeError ->
-      Logger.error("[Bolt.Sips] runtime error while committing query, [#{e.message}]")
+      Logger.error("[Bolt.Sips] runtime error while committing query")
       {:error, Bolt.Sips.Error.new(e.message)}
     e in DBConnection.ConnectionError ->
-      Logger.error("[Bolt.Sips] ConnectionError error while committing query, [#{e.message}]")
+      Logger.error("[Bolt.Sips] ConnectionError error while committing query")
       {:error, Bolt.Sips.Error.new(e.message)}
     e in Exception ->
-      Logger.error("[Bolt.Sips] other exception while committing query, [#{e.message}]")
+      Logger.error("[Bolt.Sips] other exception while committing query")
       {:current_stacktrace, stacktrace} = Process.info(self(), :current_stacktrace)
 
       # n/a in newer Elixir version:
@@ -128,7 +128,7 @@ defmodule Bolt.Sips.Query do
       reraise e, stacktrace
 
     e ->
-      Logger.error("[Bolt.Sips] other error while committing query, [#{inspect(e)}]")
+      Logger.error("[Bolt.Sips] other error while committing query")
       {:error, e}
   end
 
@@ -168,16 +168,16 @@ defmodule Bolt.Sips.Query do
           {:ok, %Response{} = r} ->
             acc ++ [r]
           {:error, e} ->
-            Logger.error("[Bolt.Sips] connection error while sending statement, [#{inspect(e)}]")
+            Logger.error("[Bolt.Sips] connection error while sending statement")
             raise DBConnection.ConnectionError, message: e
         end
 
       {:error, %Bolt.Sips.Internals.Error{code: code, message: msg}} ->
-        Logger.error("[Bolt.Sips] internal Bolt.Sips error while sending statement, [#{msg}]")
+        Logger.error("[Bolt.Sips] internal Bolt.Sips error while sending statement")
         raise Exception, code: code, message: msg
 
       {:error, %{message: message}} ->
-        Logger.error("[Bolt.Sips] error while sending statement, [#{message}]")
+        Logger.error("[Bolt.Sips] error while sending statement")
         raise DBConnection.ConnectionError, message: message
     end
   end
