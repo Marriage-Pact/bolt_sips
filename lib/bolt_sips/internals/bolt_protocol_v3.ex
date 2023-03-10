@@ -96,15 +96,15 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
         {:ok, result}
 
       {:failure, response} ->
-        Logger.error("[Bolt.Sips] failure while executing RUN, [#{response}]")
+        Logger.error("[Bolt.Sips] failure while executing RUN")
         {:error, Error.exception(response, port, :run)}
 
       %Error{} = error ->
-        Logger.error("[Bolt.Sips] error while executing RUN, [#{error.message}]")
+        Logger.error("[Bolt.Sips] error while executing RUN")
         {:error, error}
 
       other ->
-        Logger.error("[Bolt.Sips] unknown error while executing RUN, [#{inspect(other)}]")
+        Logger.error("[Bolt.Sips] unknown error while executing RUN")
         {:error, Error.exception(other, port, :run)}
     end
   end
@@ -151,11 +151,11 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
       [run_data | result]
     else
       {:error, %Error{} = error} ->
-        Logger.error("[Bolt.Sips] error running statement, [#{error.message}]")
+        Logger.error("[Bolt.Sips] error running statement")
         error
 
       other ->
-        Logger.error("[Bolt.Sips] unknown error running statement, [#{inspect(other)}]")
+        Logger.error("[Bolt.Sips] unknown error running statement")
         Error.exception(other, port, :run_statement)
     end
   end

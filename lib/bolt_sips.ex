@@ -115,7 +115,7 @@ defmodule Bolt.Sips do
       {:ok, conn} ->
         conn
       {:error, err} ->
-        Logger.error("[Bolt.Sips] error getting conn, [#{inspect(err)}]")
+        Logger.error("[Bolt.Sips] error getting conn")
         raise Exception, err
     end
   end

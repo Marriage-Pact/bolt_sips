@@ -78,7 +78,7 @@ defmodule Bolt.Sips.Query do
     end
   rescue
     e in Bolt.Sips.Exception ->
-      Logger.error("[Bolt.Sips] error in Bolt.Sips.Query.query, [#{inspect(e.message)}]")
+      Logger.error("[Bolt.Sips] error in Bolt.Sips.Query.query")
       {:error, %Bolt.Sips.Error{code: e.code, message: e.message}}
   end
 

@@ -244,15 +244,15 @@ defmodule Bolt.Sips.Router do
       {:ok, Response.first(results), updated_connections}
     else
       {:error, %Error{code: _code, message: message}} ->
-        Logger.error("[Bolt.Sips] error while getting routing table. In query, [#{message}]")
+        Logger.error("[Bolt.Sips] error while getting routing table.")
         {:error, message}
 
       {:error, msg, _updated_connections} ->
-        Logger.error("[Bolt.Sips] error while getting routing table. Unable to get connection, [#{msg}]")
+        Logger.error("[Bolt.Sips] error while getting routing table. Unable to get connection")
         {:error, :routing_table_not_available}
 
       err ->
-        Logger.error("[Bolt.Sips] get_routing_table error: #{inspect(err)}")
+        Logger.error("[Bolt.Sips] get_routing_table error")
         {:error, :routing_table_not_available_at_all}
     end
   end
@@ -458,7 +458,7 @@ defmodule Bolt.Sips.Router do
       {:ok, pid, updated_connections}
     else
       err ->
-        Logger.error("[Bolt.Sips] error in _get_connection [#{inspect(err)}]")
+        Logger.error("[Bolt.Sips] error in _get_connection")
         err_msg = error_no_connection_available_for_role(role, err)
         {:error, err_msg, connections}
     end

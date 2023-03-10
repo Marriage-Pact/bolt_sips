@@ -63,7 +63,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolHelper do
           Enum.reverse([data | previous])
 
         other ->
-          Logger.error("[Bolt.Sips] decoding error in receive_data, [#{inspect(other)}]")
+          Logger.error("[Bolt.Sips] decoding error in receive_data")
           {:error, Error.exception(other, port, :receive_data)}
       end
     else
@@ -71,7 +71,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolHelper do
         # Should be the line below to have a cleaner typespec
         # Keep the old return value to not break usage
         # {:error, Error.exception(other, port, :receive_data)}
-        Logger.error("[Bolt.Sips] error in receive_data, [#{inspect(other)}]")
+        Logger.error("[Bolt.Sips] error in receive_data")
         Error.exception(other, port, :receive_data)
     end
   end
@@ -105,7 +105,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolHelper do
       end
     else
       other ->
-        Logger.error("[Bolt.Sips] error in do_receive_data_, [#{inspect(other)}]")
+        Logger.error("[Bolt.Sips] error in do_receive_data_")
         Error.exception(other, port, :recv)
     end
   end
