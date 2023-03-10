@@ -30,20 +30,30 @@ defmodule Bolt.Sips.Router do
   @no_routing nil
   @routing_table_keys [:read, :write, :route, :updated_at, :ttl, :error]
 
-  def configure(opts), do: GenServer.call(__MODULE__, {:configure, opts})
 
-  def get_connection(role, prefix \\ :direct)
+  # PUBLIC API
 
-  def get_connection(role, prefix),
-    do: GenServer.call(__MODULE__, {:get_connection, role, prefix})
+  @spec configure(Keyword.t) :: any
+  def configure(opts) do
+    GenServer.call(__MODULE__, {:configure, opts})
+  end
 
-  def terminate_connections(role, prefix \\ :default)
+  @spec get_connection(atom, atom) :: {:ok, DBConnection.conn()} | {:error, any}
+  def get_connection(role, prefix \\ :direct) do
+    GenServer.call(__MODULE__, {:get_connection, role, prefix})
+  end
 
-  def terminate_connections(role, prefix),
-    do: GenServer.call(__MODULE__, {:terminate_connections, role, prefix})
+  def terminate_connections(role, prefix \\ :default) do
+    GenServer.call(__MODULE__, {:terminate_connections, role, prefix})
+  end
 
-  def info(), do: GenServer.call(__MODULE__, :info)
-  def routing_table(prefix), do: GenServer.call(__MODULE__, {:routing_table_info, prefix})
+  def info() do
+    GenServer.call(__MODULE__, :info)
+  end
+
+  def routing_table(prefix) do
+    GenServer.call(__MODULE__, {:routing_table_info, prefix})
+  end
 
   @spec start_link(Keyword.t()) :: :ignore | {:error, Keyword.t()} | {:ok, pid()}
   def start_link(init_args) do
@@ -55,6 +65,9 @@ defmodule Bolt.Sips.Router do
   def init(options) do
     {:ok, options, {:continue, :post_init}}
   end
+
+
+  # CALLBACKS
 
   @impl true
   def handle_call({:configure, opts}, _from, state) do
@@ -81,14 +94,17 @@ defmodule Bolt.Sips.Router do
 
   # getting connections for role in [:route, :read, :write]
   @impl true
-  def handle_call({:get_connection, role, prefix}, _from, state)
-      when role in [:route, :read, :write] do
-    with %{connections: connections} <- Map.get(state, prefix),
-         {:ok, conn, updated_connections} <- _get_connection(role, connections, prefix) do
+  def handle_call({:get_connection, role, prefix}, _from, state) when role in [:route, :read, :write] do
+    with(
+      %{connections: connections} <- Map.get(state, prefix),
+      {:ok, conn, updated_connections} <- _get_connection(role, connections, prefix)
+    )
+    do
       {:reply, {:ok, conn}, put_in(state, [prefix, :connections], updated_connections)}
     else
-      e ->
-        err_msg = error_no_connection_available_for_role(role, e, prefix)
+      err ->
+        Logger.error("[Bolt.Sips] error in get_connection callback for [:route, :read, :write] roles, [#{err}]")
+        err_msg = error_no_connection_available_for_role(role, err, prefix)
         {:reply, {:error, err_msg}, state}
     end
   end
@@ -96,10 +112,13 @@ defmodule Bolt.Sips.Router do
   # getting connections for any user defined roles, or: `:direct`
   @impl true
   def handle_call({:get_connection, role, prefix}, _from, state) do
-    with %{connections: connections} <- Map.get(state, prefix),
-         true <- Map.has_key?(connections, role),
-         [url | _none] <- connections |> Map.get(role) |> Map.keys(),
-         {:ok, pid} <- ConnectionSupervisor.find_connection(role, url, prefix) do
+    with(
+      %{connections: connections} <- Map.get(state, prefix),
+      true <- Map.has_key?(connections, role),
+      [url | _none] <- connections |> Map.get(role) |> Map.keys(),
+      {:ok, pid} <- ConnectionSupervisor.find_connection(role, url, prefix)
+    )
+    do
       {:reply, {:ok, pid}, state}
     else
       e ->
@@ -128,7 +147,9 @@ defmodule Bolt.Sips.Router do
   end
 
   @impl true
-  def handle_call(:info, _from, state), do: {:reply, state, state}
+  def handle_call(:info, _from, state) do
+    {:reply, state, state}
+  end
 
   def handle_call({:routing_table_info, prefix}, _from, state) do
     routing_table =
@@ -141,7 +162,52 @@ defmodule Bolt.Sips.Router do
 
   @impl true
   @spec handle_continue(:post_init, Keyword.t()) :: {:noreply, map}
-  def handle_continue(:post_init, opts), do: {:noreply, _configure(opts)}
+  def handle_continue(:post_init, opts) do
+    {:noreply, _configure(opts)}
+  end
+
+  @impl true
+  def handle_info({:refresh, prefix}, state) do
+    %{connections: connections, user_options: user_options} = Map.get(state, prefix)
+
+    %{ttl: ttl} = connections
+    # may overwrite the ttl, when desired in exceptional situations: tests, for example.
+    ttl = Keyword.get(user_options, :ttl, ttl)
+
+    state =
+      with(
+        {:ok, routing_table, _updated_connections} <- get_routing_table(connections, true, prefix),
+        {:ok, new_connections} <- start_connections(user_options, routing_table)
+      )
+      do
+        connections =
+          connections
+          |> Map.put(:updated_at, Bolt.Sips.Utils.now())
+          |> merge_connections_maps(new_connections, prefix)
+
+        ttl = Keyword.get(user_options, :ttl, ttl * 1000)
+
+        Process.send_after(self(), {:refresh, prefix}, ttl)
+
+        new_state = %{user_options: user_options, connections: connections}
+        Map.put(state, prefix, new_state)
+      else
+        err ->
+          Logger.error("Cannot create any connections. Error: #{inspect(err)}")
+          Map.put(state, prefix, %{user_options: user_options, connections: %{}})
+      end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(req, state) do
+    Logger.warn("Router received an unexpected message: #{inspect(req)}")
+    {:noreply, state}
+  end
+
+
+  # PRIVATE API
 
   defp _configure(opts) do
     options = Bolt.Sips.Utils.default_config(opts)
@@ -153,8 +219,11 @@ defmodule Bolt.Sips.Router do
     user_options = Keyword.put(options, :socket, ssl_or_sock)
     with_routing? = Keyword.get(user_options, :schema, "bolt") =~ ~r/(^neo4j$)|(^bolt\+routing$)/i
 
-    with {:ok, routing_table} <- get_routing_table(user_options, with_routing?),
-         {:ok, connections} <- start_connections(user_options, routing_table) do
+    with(
+      {:ok, routing_table} <- get_routing_table(user_options, with_routing?),
+      {:ok, connections} <- start_connections(user_options, routing_table)
+    )
+    do
       connections = Map.put(connections, :routing_query, routing_table[:routing_query])
 
       %{prefix => %{user_options: user_options, connections: connections}}
@@ -165,38 +234,42 @@ defmodule Bolt.Sips.Router do
     end
   end
 
-  defp get_routing_table(
-         %{routing_query: %{params: props, query: query}} = connections,
-         _,
-         prefix
-       ) do
-    with {:ok, conn, updated_connections} <- _get_connection(:route, connections, prefix),
-         {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, props) do
+  @spec get_routing_table(map, any, atom) :: {:ok, any, map} | {:error, String.t | :routing_table_not_available | :routing_table_not_available_at_all}
+  defp get_routing_table(%{routing_query: %{params: props, query: query}} = connections, _, prefix) do
+    with(
+      {:ok, conn, updated_connections} <- _get_connection(:route, connections, prefix),
+      {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, props)
+    )
+    do
       {:ok, Response.first(results), updated_connections}
     else
-      {:error, %Error{code: code, message: message}} ->
-        err_msg = "#{code}; #{message}"
-        Logger.error(err_msg)
-        {:error, err_msg}
+      {:error, %Error{code: _code, message: message}} ->
+        Logger.error("[Bolt.Sips] error while getting routing table. In query, [#{message}]")
+        {:error, message}
 
       {:error, msg, _updated_connections} ->
-        Logger.error(msg)
+        Logger.error("[Bolt.Sips] error while getting routing table. Unable to get connection, [#{msg}]")
         {:error, :routing_table_not_available}
 
-      e ->
-        Logger.error("get_routing_table error: #{inspect(e)}")
+      err ->
+        Logger.error("[Bolt.Sips] get_routing_table error: #{inspect(err)}")
         {:error, :routing_table_not_available_at_all}
     end
   end
 
-  defp get_routing_table(_opts, false), do: {:ok, @no_routing}
+  defp get_routing_table(_opts, false) do
+    {:ok, @no_routing}
+  end
 
   defp get_routing_table(opts, _) do
     prefix = Keyword.get(opts, :prefix, :default)
 
-    with {:ok, %Protocol.ConnData{configuration: configuration}} <- Protocol.connect(opts),
-         # DON'T>  :ok <- Protocol.disconnect(:stop, conn),
-         {_long, short} <- parse_server_version(configuration[:server_version]) do
+    with(
+      {:ok, %Protocol.ConnData{configuration: configuration}} <- Protocol.connect(opts),
+      # DON'T>  :ok <- Protocol.disconnect(:stop, conn),
+      {_long, short} <- parse_server_version(configuration[:server_version])
+    )
+    do
       {query, params} =
         if Version.match?(short, ">= 3.2.3") do
           props = Keyword.get(opts, :routing_context, %{})
@@ -205,9 +278,12 @@ defmodule Bolt.Sips.Router do
           {"CALL dbms.cluster.routing.getServers()", %{}}
         end
 
-      with {:ok, pid} <- DBConnection.start_link(Protocol, Keyword.delete(opts, :name)),
-           {:ok, %Response{} = results} <- Bolt.Sips.query(pid, query, params),
-           true <- Process.exit(pid, :normal) do
+      with(
+        {:ok, pid} <- DBConnection.start_link(Protocol, Keyword.delete(opts, :name)),
+        {:ok, %Response{} = results} <- Bolt.Sips.query(pid, query, params),
+        true <- Process.exit(pid, :normal)
+      )
+      do
         table =
           results
           |> Response.first()
@@ -226,8 +302,7 @@ defmodule Bolt.Sips.Router do
           {:error, message}
 
         _e ->
-          "Are you sure you're connected to a Neo4j cluster? The routing table, is not available."
-          |> Logger.error()
+          Logger.error("Are you sure you're connected to a Neo4j cluster? The routing table is not available.")
 
           {:error, :routing_table_not_available}
       end
@@ -241,95 +316,52 @@ defmodule Bolt.Sips.Router do
    configuration: `opts`. The `role` parameter is ignored when the `routing_table` parameter represents
    a neo4j map containing the definition for a neo4j cluster! It defaults to: `:direct`, when not specified!
   """
-  def start_connections(opts, routing_table)
-
-  def start_connections(opts, routing_table) when is_nil(routing_table) do
+  @spec start_connections(any(), map | nil) :: {:ok, map}
+  defp start_connections(opts, nil) do
     url = "#{opts[:hostname]}:#{opts[:port]}"
     role = Keyword.get(opts, :role, :direct)
 
-    with {:ok, _pid} <- ConnectionSupervisor.start_child(role, url, opts) do
-      {:ok, %{role => %{url => 0}}}
-    end
+    {:ok, _pid} = ConnectionSupervisor.start_child(role, url, opts)
+
+    {:ok, %{role => %{url => 0}}}
   end
 
-  def start_connections(opts, routing_table) do
+  defp start_connections(opts, raw_routing_table) do
+    routing_table = RoutingTable.parse(raw_routing_table)
+
     connections =
-      with %Bolt.Sips.Routing.RoutingTable{roles: roles} = rt <- RoutingTable.parse(routing_table) do
-        roles
-        |> Enum.reduce(%{}, fn {role, addresses}, acc ->
-          addresses
-          |> Enum.reduce(acc, fn {address, count}, acc ->
-            # interim hack; force the schema to be `bolt`, otherwise the parse is not happening
-            url = "bolt://" <> address
-            %URI{host: host, port: port} = URI.parse(url)
+      routing_table.roles
+      |> Enum.reduce(%{}, fn {role, addresses}, acc ->
+        addresses
+        |> Enum.reduce(acc, fn {address, count}, acc ->
+          # interim hack; force the schema to be `bolt`, otherwise the parse is not happening
+          url = "bolt://" <> address
+          %URI{host: host, port: port} = URI.parse(url)
 
-            # Important!
-            # We remove the url from the routing-specific configs, because the port and the address where the
-            # socket will be opened, is using the host and the port returned by the routing table, and not by the
-            # initial url param. The Utils will overwrite them if the `url` is defined!
-            config =
-              opts
-              |> Keyword.put(:host, String.to_charlist(host))
-              |> Keyword.put(:port, port)
-              |> Keyword.put(:name, role)
-              |> Keyword.put(:hits, count)
-              |> Keyword.delete(:url)
+          # Important!
+          # We remove the url from the routing-specific configs, because the port and the address where the
+          # socket will be opened, is using the host and the port returned by the routing table, and not by the
+          # initial url param. The Utils will overwrite them if the `url` is defined!
+          config =
+            opts
+            |> Keyword.put(:host, String.to_charlist(host))
+            |> Keyword.put(:port, port)
+            |> Keyword.put(:name, role)
+            |> Keyword.put(:hits, count)
+            |> Keyword.delete(:url)
 
-            with {:ok, _pid} <- ConnectionSupervisor.start_child(role, address, config) do
-              Map.update(acc, role, %{address => 0}, fn urls -> Map.put(urls, address, 0) end)
-            else
-              _ -> acc
-            end
-          end)
-          |> Map.merge(acc)
+          {:ok, _pid} = ConnectionSupervisor.start_child(role, address, config)
+
+          Map.update(acc, role, %{address => 0}, fn urls -> Map.put(urls, address, 0) end)
         end)
-        |> Map.put(:ttl, rt.ttl)
-        |> Map.put(:updated_at, rt.updated_at)
-      end
+        |> Map.merge(acc)
+      end)
+      |> Map.put(:ttl, routing_table.ttl)
+      |> Map.put(:updated_at, routing_table.updated_at)
 
     {:ok, connections}
   end
 
-  @with_routing true
-  @impl true
-  def handle_info({:refresh, prefix}, state) do
-    %{connections: connections, user_options: user_options} = Map.get(state, prefix)
-
-    %{ttl: ttl} = connections
-    # may overwrite the ttl, when desired in exceptional situations: tests, for example.
-    ttl = Keyword.get(user_options, :ttl, ttl)
-
-    state =
-      with {:ok, routing_table, _updated_connections} <-
-             get_routing_table(connections, @with_routing, prefix),
-           {:ok, new_connections} <- start_connections(user_options, routing_table) do
-        connections =
-          connections
-          |> Map.put(:updated_at, Bolt.Sips.Utils.now())
-          |> merge_connections_maps(new_connections, prefix)
-
-        ttl = Keyword.get(user_options, :ttl, ttl * 1000)
-
-        Process.send_after(self(), {:refresh, prefix}, ttl)
-
-        new_state = %{user_options: user_options, connections: connections}
-        Map.put(state, prefix, new_state)
-      else
-        e ->
-          Logger.error("Cannot create any connections. Error: #{inspect(e)}")
-          Map.put(state, prefix, %{user_options: user_options, connections: %{}})
-      end
-
-    {:noreply, state}
-  end
-
-  def handle_info(req, state) do
-    Logger.warn("An unusual request: #{inspect(req)}")
-    {:noreply, state}
-  end
-
-  @server_version_stringex ~r/Neo4j\/(?<M>\d+)\.(?<m>\d+)\.(?<p>\d+)/
-  @spec parse_server_version(map) :: {binary, <<_::16, _::_*8>>}
   @doc """
   parse the version string received from the server, while considering the lack of the
   patch number in some situations
@@ -349,37 +381,42 @@ defmodule Bolt.Sips.Router do
   {"Neo4j/3.5.11.1", "3.5.11"}
 
   """
-  def parse_server_version(%{"server" => server_version_string}) do
+  @spec parse_server_version(map) :: {binary, <<_::16, _::_*8>>}
+  def parse_server_version(%{"server" => _server_version_string}) do
     server_version_string = "Neo4j/4.4"
 
-    %{"M" => major, "m" => minor, "p" => patch} =
-      @server_version_stringex
-      |> Regex.named_captures(server_version_string <> ".0")
+    server_version_regex = ~r/Neo4j\/(?<M>\d+)\.(?<m>\d+)\.(?<p>\d+)/
+
+    %{"M" => major, "m" => minor, "p" => patch} = Regex.named_captures(server_version_regex, server_version_string <> ".0")
 
     {server_version_string, "#{major}.#{minor}.#{patch}"}
   end
 
-  def parse_server_version(some_version),
-    do: raise(ArgumentError, "not a Neo4J version info: " <> inspect(some_version))
+  def parse_server_version(some_version) do
+    raise ArgumentError, "not a Neo4J version: " <> inspect(some_version)
+  end
 
-  defp error_no_connection_available_for_role(role, _e, prefix \\ :default)
-
-  defp error_no_connection_available_for_role(role, _e, prefix) do
+  @spec error_no_connection_available_for_role(any(), any(), atom()) :: String.t
+  defp error_no_connection_available_for_role(role, _e, prefix \\ :default) do
     "no connection exists with this role: #{role} (prefix: #{prefix})"
   end
 
   @routing_roles ~w{read write route}a
-  @spec merge_connections_maps(any(), any(), any()) :: any()
-  def merge_connections_maps(current_connections, new_connections, prefix \\ :default)
-
-  def merge_connections_maps(current_connections, new_connections, prefix) do
+  @spec merge_connections_maps(any(), any(), atom()) :: any()
+  def merge_connections_maps(current_connections, new_connections, prefix \\ :default) do
     @routing_roles
     |> Enum.flat_map(fn role ->
       new_urls = Map.keys(new_connections[role])
 
       current_connections[role]
       |> Map.keys()
-      |> Enum.flat_map(fn url -> remove_old_urls(role, url, new_urls) end)
+      |> Enum.flat_map(fn url ->
+        if url in new_urls do
+          []
+        else
+          [{role, url}]
+        end
+      end)
     end)
     |> close_connections(prefix)
 
@@ -389,8 +426,6 @@ defmodule Bolt.Sips.Router do
     end)
   end
 
-  defp remove_old_urls(role, url, urls), do: if(url in urls, do: [], else: [{role, url}])
-
   # [
   #   read: "localhost:7689",
   #   write: "localhost:7687",
@@ -398,33 +433,33 @@ defmodule Bolt.Sips.Router do
   #   route: "localhost:7688",
   #   route: "localhost:7689"
   # ]
+  @spec close_connections(any, any) :: :ok
   defp close_connections(connections, prefix) do
-    connections
-    |> Enum.each(fn {role, url} ->
-      with {:ok, _pid} = r <- ConnectionSupervisor.terminate_connection(role, url, prefix) do
-        r
-      else
+    Enum.each(connections, fn {role, url} ->
+      case ConnectionSupervisor.terminate_connection(role, url, prefix) do
+        {:ok, pid} ->
+          {:ok, pid}
         {:error, :not_found} ->
           Logger.debug("#{role}: #{url}; not a valid connection/process. It can't be terminated")
       end
     end)
   end
 
-  @spec _get_connection(role :: String.t() | atom, state :: map, prefix :: atom) ::
-          {:ok, pid, map} | {:error, any, map}
+  @spec _get_connection(String.t() | atom, map, atom) :: {:ok, pid, map} | {:error, any, map}
   defp _get_connection(role, connections, prefix) do
-    with true <- Map.has_key?(connections, role),
-         {:ok, url} <-
-           LoadBalancer.least_reused_url(Map.get(connections, role)),
-         {:ok, pid} <- ConnectionSupervisor.find_connection(role, url, prefix) do
-      {_, updated_connections} =
-        connections
-        |> get_and_update_in([role, url], fn hits -> {hits, hits + 1} end)
+    with(
+      true <- Map.has_key?(connections, role),
+      {:ok, url} <- LoadBalancer.least_reused_url(Map.get(connections, role)),
+      {:ok, pid} <- ConnectionSupervisor.find_connection(role, url, prefix)
+    )
+    do
+      {_, updated_connections} = get_and_update_in(connections, [role, url], fn hits -> {hits, hits + 1} end)
 
       {:ok, pid, updated_connections}
     else
-      e ->
-        err_msg = error_no_connection_available_for_role(role, e)
+      err ->
+        Logger.error("[Bolt.Sips] error in _get_connection [#{inspect(err)}]")
+        err_msg = error_no_connection_available_for_role(role, err)
         {:error, err_msg, connections}
     end
   end

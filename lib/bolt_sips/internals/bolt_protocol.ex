@@ -189,8 +189,7 @@ defmodule Bolt.Sips.Internals.BoltProtocol do
         options_v3 \\ []
       )
 
-  def run_statement(transport, port, bolt_version, statement, params, options_or_metadata, _)
-      when bolt_version <= 2 do
+  def run_statement(transport, port, bolt_version, statement, params, options_or_metadata, _) when bolt_version <= 2 do
     BoltProtocolV1.run_statement(
       transport,
       port,
@@ -201,8 +200,7 @@ defmodule Bolt.Sips.Internals.BoltProtocol do
     )
   end
 
-  def run_statement(transport, port, bolt_version, statement, params, metadata, options)
-      when bolt_version >= 2 do
+  def run_statement(transport, port, bolt_version, statement, params, metadata, options) when bolt_version >= 2 do
     metadata =
       case metadata do
         [] -> %{}

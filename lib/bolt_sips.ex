@@ -26,6 +26,8 @@ defmodule Bolt.Sips do
 
   use Supervisor
 
+  require Logger
+
   @registry_name :bolt_sips_registry
 
   # @timeout 15_000
@@ -80,18 +82,14 @@ defmodule Bolt.Sips do
       Bolt.Sips.query!(conn, "return 1 as n")
 
   """
-  @spec start_link(Keyword.t()) :: Supervisor.on_start()
+  @spec start_link(Keyword.t) :: Supervisor.on_start()
   def start_link(opts) do
-    with nil <- Process.whereis(__MODULE__) do
-      Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
-    else
+    case Process.whereis(__MODULE__) do
+      nil ->
+        Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
       pid ->
         Router.configure(opts)
         {:ok, pid}
-
-      {pid, node} ->
-        Router.configure(opts)
-        {:ok, {pid, node}}
     end
   end
 
@@ -109,20 +107,16 @@ defmodule Bolt.Sips do
   Returns a pool name which can be used to acquire a connection from a pool of servers
   responsible with a specific type of operations: read, write and route, or all of the above: "direct"
   """
-  @spec conn(atom, keyword) :: conn
-  def conn(role \\ :direct, opts \\ [prefix: :default])
-
-  def conn(role, opts) do
+  @spec conn(atom, Keyword.t) :: conn
+  def conn(role \\ :direct, opts \\ [prefix: :default]) do
     prefix = Keyword.get(opts, :prefix, :default)
 
-    with {:ok, conn} <- Router.get_connection(role, prefix) do
-      conn
-    else
-      {:error, e} ->
-        raise Exception, e
-
-      e ->
-        {:error, e}
+    case Router.get_connection(role, prefix) do
+      {:ok, conn} ->
+        conn
+      {:error, err} ->
+        Logger.error("[Bolt.Sips] error getting conn, [#{inspect(err)}]")
+        raise Exception, err
     end
   end
 

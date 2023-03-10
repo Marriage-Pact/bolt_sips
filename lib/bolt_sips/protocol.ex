@@ -26,6 +26,7 @@ defmodule Bolt.Sips.Protocol do
   @doc "Callback for DBConnection.connect/1"
 
   def connect(opts \\ [])
+
   def connect([]), do: connect(Bolt.Sips.Utils.default_config())
 
   def connect(opts) do
@@ -177,13 +178,16 @@ defmodule Bolt.Sips.Protocol do
         {:ok, q, data, conn_data}
 
       %BoltError{type: :cypher_error} = error ->
+        Logger.error("[Bolt.Sips] cypher error executing query, [#{inspect(error.message)}]")
         BoltProtocol.reset(socket, sock, bolt_version)
         {:error, error, conn_data}
 
       %BoltError{type: :connection_error} = error ->
+        Logger.error("[Bolt.Sips] connection error executing query, [#{inspect(error.message)}]")
         {:disconnect, error, conn_data}
 
       %BoltError{} = error ->
+        Logger.error("[Bolt.Sips] other error executing query, [#{inspect(error.message)}]")
         {:error, error, conn_data}
     end
   rescue

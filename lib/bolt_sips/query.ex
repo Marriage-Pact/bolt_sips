@@ -48,6 +48,8 @@ defmodule Bolt.Sips.Query do
   """
   alias Bolt.Sips.{QueryStatement, Response, Types, Error, Exception}
 
+  require Logger
+
   @cypher_seps ~r/;(.){0,1}\n/
 
   @spec query!(Bolt.Sips.conn(), String.t()) :: Response.t() | Exception.t()
@@ -55,37 +57,35 @@ defmodule Bolt.Sips.Query do
 
   @spec query!(Bolt.Sips.conn(), String.t(), map, Keyword.t()) :: Response.t() | Exception.t()
   def query!(conn, statement, params, opts \\ []) when is_map(params) do
-    with {:ok, r} <- query_commit(conn, statement, params, opts) do
-      r
-    else
+    case query_commit(conn, statement, params, opts) do
+      {:ok, response} ->
+        response
       {:error, msg} ->
         raise Exception, message: msg
-
-      e ->
-        raise Exception, message: "unexpected error: #{inspect(e)}"
     end
   end
 
   @spec query(Bolt.Sips.conn(), String.t()) :: {:error, Error.t()} | {:ok, Response.t()}
-  def query(conn, statement), do: query(conn, statement, %{})
+  def query(conn, statement) do
+    query(conn, statement, %{})
+  end
 
-  @spec query(Bolt.Sips.conn(), String.t(), map, Keyword.t()) ::
-          {:error, Error.t()} | {:ok, Response.t()}
+  @spec query(Bolt.Sips.conn(), String.t(), map, Keyword.t()) :: {:error, Error.t()} | {:ok, Response.t()}
   def query(conn, statement, params, opts \\ []) when is_map(params) do
     case query_commit(conn, statement, params, opts) do
+      {:ok, response} -> {:ok, response}
       {:error, message} -> {:error, %Error{message: message}}
-      r -> r
     end
   rescue
     e in Bolt.Sips.Exception ->
+      Logger.error("[Bolt.Sips] error in Bolt.Sips.Query.query, [#{inspect(e.message)}]")
       {:error, %Bolt.Sips.Error{code: e.code, message: e.message}}
   end
 
   ###########
   # Private #
   ###########
-  @spec query_commit(Bolt.Sips.conn(), String.t(), map, Keyword.t()) ::
-          {:error, Error.t()} | {:ok, Response.t()}
+  @spec query_commit(Bolt.Sips.conn(), String.t(), map, Keyword.t()) :: {:error, Error.t()} | {:ok, Response.t()}
   defp query_commit(conn, statement, params, opts) do
     statements =
       statement
@@ -111,10 +111,14 @@ defmodule Bolt.Sips.Query do
 
     {:ok, commit!(errors, conn, statements, formatted_params, opts)}
   rescue
-    e in [RuntimeError, DBConnection.ConnectionError] ->
+    e in RuntimeError ->
+      Logger.error("[Bolt.Sips] runtime error while committing query, [#{e.message}]")
       {:error, Bolt.Sips.Error.new(e.message)}
-
+    e in DBConnection.ConnectionError ->
+      Logger.error("[Bolt.Sips] ConnectionError error while committing query, [#{e.message}]")
+      {:error, Bolt.Sips.Error.new(e.message)}
     e in Exception ->
+      Logger.error("[Bolt.Sips] other exception while committing query, [#{e.message}]")
       {:current_stacktrace, stacktrace} = Process.info(self(), :current_stacktrace)
 
       # n/a in newer Elixir version:
@@ -124,24 +128,28 @@ defmodule Bolt.Sips.Query do
       reraise e, stacktrace
 
     e ->
+      Logger.error("[Bolt.Sips] other error while committing query, [#{inspect(e)}]")
       {:error, e}
   end
 
-  defp commit!([], conn, statements, formatted_params, opts),
-    do: tx!(conn, statements, formatted_params, opts)
+  defp commit!([], conn, statements, formatted_params, opts) do
+    tx!(conn, statements, formatted_params, opts)
+  end
 
-  defp commit!(errors, _conn, _statements, _formatted_params, _opts),
-    do: raise(Exception, message: "Unable to format params: #{inspect(errors)}")
+  defp commit!(errors, _conn, _statements, _formatted_params, _opts) do
+    raise Exception, message: "Unable to format params: #{inspect(errors)}"
+  end
 
-  defp tx!(conn, [statement], params, opts), do: hd(send!(conn, statement, params, opts))
+  defp tx!(conn, [statement], params, opts) do
+    hd(send!(conn, statement, params, opts))
+  end
 
   # todo It returns [Response.t] !!!
-  defp tx!(conn, statements, params, opts) when is_list(statements),
-    do: Enum.reduce(statements, [], &send!(conn, &1, params, opts, &2))
+  defp tx!(conn, statements, params, opts) when is_list(statements) do
+    Enum.reduce(statements, [], &send!(conn, &1, params, opts, &2))
+  end
 
-  defp send!(conn, statement, params, opts, acc \\ [])
-
-  defp send!(conn, statement, params, opts, acc) do
+  defp send!(conn, statement, params, opts, acc \\ []) do
     # Retrieve timeout defined in config
     prefix = Keyword.get(opts, :prefix, :default)
 
@@ -157,14 +165,19 @@ defmodule Bolt.Sips.Query do
     case DBConnection.execute(conn, %QueryStatement{statement: statement}, params, opts) do
       {:ok, _query, resp} ->
         case Response.transform(resp) do
-          {:ok, %Response{} = r} -> acc ++ [r]
-          {:error, e} -> raise DBConnection.ConnectionError, message: e
+          {:ok, %Response{} = r} ->
+            acc ++ [r]
+          {:error, e} ->
+            Logger.error("[Bolt.Sips] connection error while sending statement, [#{inspect(e)}]")
+            raise DBConnection.ConnectionError, message: e
         end
 
       {:error, %Bolt.Sips.Internals.Error{code: code, message: msg}} ->
+        Logger.error("[Bolt.Sips] internal Bolt.Sips error while sending statement, [#{msg}]")
         raise Exception, code: code, message: msg
 
       {:error, %{message: message}} ->
+        Logger.error("[Bolt.Sips] error while sending statement, [#{message}]")
         raise DBConnection.ConnectionError, message: message
     end
   end

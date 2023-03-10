@@ -25,6 +25,7 @@ defmodule Bolt.Sips.ConnectionSupervisor do
   the resulting connection name i.e. "write@localhost:7687" will be used to spawn new
   DBConnection processes, and for finding available connections
   """
+  @spec start_child(any, any, Keyword.t) :: {:ok, pid}
   def start_child(role, url, config) do
     prefix = Keyword.get(config, :prefix, :default)
 
@@ -54,36 +55,47 @@ defmodule Bolt.Sips.ConnectionSupervisor do
       shutdown: 500
     }
 
-    # [Protocol, role_config];
-    with {:error, :not_found} <- find_connection(connection_name),
-         {:ok, _pid} = r <- DynamicSupervisor.start_child(@name, spec) do
-      [spec, r]
-
-      r
+    with(
+      {:error, :not_found} <- find_connection(connection_name),
+      {:ok, pid} <- DynamicSupervisor.start_child(@name, spec)
+    )
+    do
+      {:ok, pid}
     else
-      {:ok, pid, _info} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      pid -> {:ok, pid}
+      {:ok, pid, _info} ->
+        {:ok, pid}
+      {:error, {:already_started, pid}} ->
+        {:ok, pid}
+      pid ->
+        {:ok, pid}
     end
   end
 
-  @spec find_connection(atom, String.t(), atom) :: {:error, :not_found} | {:ok, pid()}
-  def find_connection(role, url, prefix), do: find_connection("#{prefix}_#{role}@#{url}")
+  @spec find_connection(atom, String.t, atom) :: {:ok, pid} | {:error, :not_found}
+  def find_connection(role, url, prefix) do
+    find_connection("#{prefix}_#{role}@#{url}")
+  end
 
-  @spec find_connection(any()) :: {:error, :not_found} | {:ok, pid()}
+  @spec find_connection(String.t) :: {:error, :not_found} | {:ok, pid}
   def find_connection(name) do
     case Registry.lookup(Sips.registry_name(), name) do
-      [{pid, _}] -> {:ok, pid}
-      _ -> {:error, :not_found}
+      [{pid, _}] ->
+        {:ok, pid}
+      _ ->
+        Logger.error("[Bolt.Sips] error could not find connection. Name was [#{name}]")
+        {:error, :not_found}
     end
   end
 
-  @spec terminate_connection(atom, String.t(), atom) :: {:error, :not_found} | {:ok, pid()}
+  @spec terminate_connection(atom, String.t, atom) :: {:error, :not_found} | {:ok, pid}
   def terminate_connection(role, url, prefix \\ :default) do
-    with {:ok, pid} = r <- find_connection(role, url, prefix),
-         true <- Process.exit(pid, :normal) do
-      connections()
-      r
+    case find_connection(role, url, prefix) do
+      {:ok, pid} = conn ->
+        Process.exit(pid, :normal)
+        connections()
+        conn
+      err ->
+        err
     end
   end
 

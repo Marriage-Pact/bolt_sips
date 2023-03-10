@@ -1,4 +1,6 @@
 defmodule Bolt.Sips.Internals.BoltProtocolV3 do
+  require Logger
+
   alias Bolt.Sips.Internals.BoltProtocol
   alias Bolt.Sips.Internals.BoltProtocolHelper
   alias Bolt.Sips.Internals.Error
@@ -22,8 +24,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
       iex> Bolt.Sips.Internals.BoltProtocolV3.hello(:gen_tcp, port, 3, {"username", "password"}, [])
       {:ok, info}
   """
-  @spec hello(atom(), port(), integer(), tuple(), Keyword.t()) ::
-          {:ok, any()} | {:error, Bolt.Sips.Internals.Error.t()}
+  @spec hello(atom(), port(), integer(), tuple(), Keyword.t()) :: {:ok, any()} | {:error, Bolt.Sips.Internals.Error.t()}
   def hello(transport, port, bolt_version, auth, options \\ [recv_timeout: 15_000]) do
     BoltProtocolHelper.send_message(transport, port, bolt_version, {:hello, [auth]})
 
@@ -70,7 +71,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
   Implementation of Bolt's RUN. It passes a statement for execution on the server.
 
   Note that this message doesn't return the statement result. For this purpose, use PULL_ALL.
-  In bolt >= 3, run has an additional paramters; metadata
+  In bolt >= 3, run has an additional parameters; metadata
 
   ## Options
 
@@ -81,8 +82,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
       iex> BoltProtocolV1.run(:gen_tcp, port, 1, "RETURN $num AS num", %{num: 5}, %{}, [])
       {:ok, {:success, %{"fields" => ["num"]}}}
   """
-  @spec run(atom(), port(), integer(), String.t(), map(), Bolt.Sips.Metadata.t(), Keyword.t()) ::
-          {:ok, any()} | {:error, Bolt.Sips.Internals.Error.t()}
+  @spec run(atom(), port(), integer(), String.t(), map(), Bolt.Sips.Metadata.t(), Keyword.t()) :: {:ok, any()} | {:error, Bolt.Sips.Internals.Error.t()}
   def run(transport, port, bolt_version, statement, params, metadata, options) do
     BoltProtocolHelper.send_message(
       transport,
@@ -96,12 +96,15 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
         {:ok, result}
 
       {:failure, response} ->
+        Logger.error("[Bolt.Sips] failure while executing RUN, [#{response}]")
         {:error, Error.exception(response, port, :run)}
 
       %Error{} = error ->
+        Logger.error("[Bolt.Sips] error while executing RUN, [#{error.message}]")
         {:error, error}
 
       other ->
+        Logger.error("[Bolt.Sips] unknown error while executing RUN, [#{inspect(other)}]")
         {:error, Error.exception(other, port, :run)}
     end
   end
@@ -140,15 +143,19 @@ defmodule Bolt.Sips.Internals.BoltProtocolV3 do
           ]
           | Bolt.Sips.Internals.Error.t()
   def run_statement(transport, port, bolt_version, statement, params, metadata, options) do
-    with {:ok, run_data} <-
-           run(transport, port, bolt_version, statement, params, metadata, options),
-         {:ok, result} <- BoltProtocol.pull_all(transport, port, bolt_version, options) do
+    with(
+      {:ok, run_data} <- run(transport, port, bolt_version, statement, params, metadata, options),
+      {:ok, result} <- BoltProtocol.pull_all(transport, port, bolt_version, options)
+    )
+    do
       [run_data | result]
     else
       {:error, %Error{} = error} ->
+        Logger.error("[Bolt.Sips] error running statement, [#{error.message}]")
         error
 
       other ->
+        Logger.error("[Bolt.Sips] unknown error running statement, [#{inspect(other)}]")
         Error.exception(other, port, :run_statement)
     end
   end
