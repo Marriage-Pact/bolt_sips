@@ -15,8 +15,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolHelper do
 
   Message have to be in the form of {message_type, [data]}.
   """
-  @spec send_message(atom(), port(), integer(), Bolt.Sips.Internals.PackStream.Message.raw()) ::
-          :ok | {:error, any()}
+  @spec send_message(atom(), port(), integer(), Bolt.Sips.Internals.PackStream.Message.raw()) :: :ok | {:error, any()}
   def send_message(transport, port, bolt_version, message) do
     message
     |> Message.encode(bolt_version)
@@ -50,10 +49,7 @@ defmodule Bolt.Sips.Internals.BoltProtocolHelper do
 
   See "Shared options" in the documentation of this module.
   """
-  @spec receive_data(atom(), port(), integer(), Keyword.t(), list()) ::
-          {atom(), Bolt.Sips.Internals.PackStream.value()}
-          | {:error, any()}
-          | Bolt.Sips.Internals.Error.t()
+  @spec receive_data(atom(), port(), integer(), Keyword.t(), list()) :: {atom(), Bolt.Sips.Internals.PackStream.value()} | {:error, any()} | Bolt.Sips.Internals.Error.t()
   def receive_data(transport, port, bolt_version, options \\ [], previous \\ []) do
     with {:ok, data} <- do_receive_data(transport, port, options) do
       case Message.decode(data, bolt_version) do

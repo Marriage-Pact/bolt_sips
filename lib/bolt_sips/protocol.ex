@@ -178,16 +178,16 @@ defmodule Bolt.Sips.Protocol do
         {:ok, q, data, conn_data}
 
       %BoltError{type: :cypher_error} = error ->
-        Logger.error("[Bolt.Sips] cypher error executing query, [#{inspect(error.message)}]")
+        Logger.error("[Bolt.Sips] cypher error executing query")
         BoltProtocol.reset(socket, sock, bolt_version)
         {:error, error, conn_data}
 
       %BoltError{type: :connection_error} = error ->
-        Logger.error("[Bolt.Sips] connection error executing query, [#{inspect(error.message)}]")
+        Logger.error("[Bolt.Sips] connection error executing query")
         {:disconnect, error, conn_data}
 
       %BoltError{} = error ->
-        Logger.error("[Bolt.Sips] other error executing query, [#{inspect(error.message)}]")
+        Logger.error("[Bolt.Sips] other error executing query")
         {:error, error, conn_data}
     end
   rescue
