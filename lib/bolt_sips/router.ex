@@ -168,6 +168,7 @@ defmodule Bolt.Sips.Router do
 
   @impl true
   def handle_info({:refresh, prefix}, state) do
+    Logger.info("[Bolt.Sips] refreshing routing table connections")
     %{connections: connections, user_options: user_options} = Map.get(state, prefix)
 
     %{ttl: ttl} = connections
@@ -176,7 +177,8 @@ defmodule Bolt.Sips.Router do
 
     state =
       with(
-        {:ok, routing_table, _updated_connections} <- get_routing_table(connections, true, prefix),
+        # TODO: this is a hack, because the `get_routing_table/3` function is not working properly
+        {:ok, routing_table} <- get_routing_table(user_options, true, false),
         {:ok, new_connections} <- start_connections(user_options, routing_table)
       )
       do
@@ -189,6 +191,7 @@ defmodule Bolt.Sips.Router do
 
         Process.send_after(self(), {:refresh, prefix}, ttl)
 
+        Logger.info("[Bolt.Sips] refreshing routing table connections in #{ttl / 1000}sec")
         new_state = %{user_options: user_options, connections: connections}
         Map.put(state, prefix, new_state)
       else
@@ -219,49 +222,55 @@ defmodule Bolt.Sips.Router do
     user_options = Keyword.put(options, :socket, ssl_or_sock)
     with_routing? = Keyword.get(user_options, :schema, "bolt") =~ ~r/(^neo4j$)|(^bolt\+routing$)/i
 
-    with(
-      {:ok, routing_table} <- get_routing_table(user_options, with_routing?),
-      {:ok, connections} <- start_connections(user_options, routing_table)
-    )
-    do
-      connections = Map.put(connections, :routing_query, routing_table[:routing_query])
-
-      %{prefix => %{user_options: user_options, connections: connections}}
-    else
+    case get_routing_table(user_options, with_routing?) do
+      {:ok, table} ->
+        case start_connections(user_options, table) do
+          {:ok, connections} ->
+            connections = Map.put(connections, :routing_query, table[:routing_query])
+            %{prefix => %{user_options: user_options, connections: connections}}
+          _other ->
+            Logger.error("[Bolt.Sips] cannot start connections.")
+        end
+      {:error, msg} when is_struct(msg) ->
+        Logger.error("[Bolt.Sips] cannot load the routing table. Error: #{inspect(Map.from_struct(msg))}")
+        %{prefix => %{user_options: user_options, connections: %{error: "Not a router"}}}
       {:error, msg} ->
-        Logger.error("cannot load the routing table. Error: #{msg}")
+        Logger.error("[Bolt.Sips] cannot load the routing table. Error: #{msg}")
         %{prefix => %{user_options: user_options, connections: %{error: "Not a router"}}}
     end
   end
 
-  @spec get_routing_table(map, any, atom) :: {:ok, any, map} | {:error, String.t | :routing_table_not_available | :routing_table_not_available_at_all}
-  defp get_routing_table(%{routing_query: %{params: props, query: query}} = connections, _, prefix) do
-    with(
-      {:ok, conn, updated_connections} <- _get_connection(:route, connections, prefix),
-      {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, props)
-    )
-    do
-      {:ok, Response.first(results), updated_connections}
-    else
-      {:error, %Error{code: _code, message: message}} ->
-        Logger.error("[Bolt.Sips] error while getting routing table.")
-        {:error, message}
+  # @spec get_routing_table(map, any, atom) :: {:ok, any, map} | {:error, String.t | :routing_table_not_available | :routing_table_not_available_at_all}
+  # defp get_routing_table(%{routing_query: %{params: props, query: query}} = connections, _, prefix) do
+  #   IO.inspect(connections)
 
-      {:error, msg, _updated_connections} ->
-        Logger.error("[Bolt.Sips] error while getting routing table. Unable to get connection")
-        {:error, :routing_table_not_available}
+  #   with(
+  #     {:ok, conn, updated_connections} <- _get_connection(:route, connections, prefix),
+  #     {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, props)
+  #   )
+  #   do
+  #     {:ok, Response.first(results), updated_connections}
+  #   else
+  #     {:error, %Error{code: _code, message: message}} ->
+  #       Logger.error("[Bolt.Sips] error while getting routing table.")
+  #       {:error, message}
 
-      err ->
-        Logger.error("[Bolt.Sips] get_routing_table error")
-        {:error, :routing_table_not_available_at_all}
-    end
-  end
+  #     {:error, msg, _updated_connections} ->
+  #       Logger.error("[Bolt.Sips] error while getting routing table. Unable to get connection")
+  #       {:error, :routing_table_not_available}
+
+  #     err ->
+  #       Logger.error("[Bolt.Sips] get_routing_table error")
+  #       {:error, :routing_table_not_available_at_all}
+  #   end
+  # end
 
   defp get_routing_table(_opts, false) do
     {:ok, @no_routing}
   end
 
-  defp get_routing_table(opts, _) do
+  defp get_routing_table(opts, _, trigger_refresh \\ true) do
+    Logger.info("[Bolt.Sips] fetching routing table")
     prefix = Keyword.get(opts, :prefix, :default)
 
     with(
@@ -293,19 +302,30 @@ defmodule Bolt.Sips.Router do
         # may overwrite the ttl, when desired in exceptional situations: tests, for example.
         ttl = Keyword.get(opts, :ttl, ttl)
 
-        Process.send_after(self(), {:refresh, prefix}, ttl)
+        if trigger_refresh do
+          Process.send_after(self(), {:refresh, prefix}, ttl)
+        end
+
+        Logger.info("[Bolt.Sips] refreshing routing table connections in #{ttl / 1000}sec")
 
         {:ok, table}
       else
         {:error, %Error{message: message}} ->
-          Logger.error(message)
+          Logger.error("[Bolt.Sips] Are you sure you're connected to a Neo4j cluster? The routing table is not available. Message was #{message}")
           {:error, message}
 
         _e ->
-          Logger.error("Are you sure you're connected to a Neo4j cluster? The routing table is not available.")
+          Logger.error("[Bolt.Sips] Are you sure you're connected to a Neo4j cluster? The routing table is not available.")
 
           {:error, :routing_table_not_available}
       end
+    else
+      {:error, other} when is_struct(other) ->
+        Logger.error("[Bolt.Sips] error while getting routing table. Error: #{inspect(Map.from_struct(other))}")
+        {:error, other}
+      other ->
+        Logger.error("[Bolt.Sips] error while getting routing table. Error: #{other}")
+        other
     end
   end
 
