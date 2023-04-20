@@ -304,9 +304,8 @@ defmodule Bolt.Sips.Router do
 
         if trigger_refresh do
           Process.send_after(self(), {:refresh, prefix}, ttl)
+          Logger.info("[Bolt.Sips] refreshing routing table connections in #{ttl / 1000}sec")
         end
-
-        Logger.info("[Bolt.Sips] refreshing routing table connections in #{ttl / 1000}sec")
 
         {:ok, table}
       else
