@@ -89,7 +89,7 @@ defmodule Bolt.Sips.Protocol do
 
   def disconnect(_err, %ConnData{sock: sock, bolt_version: 3, configuration: conf} = conn_data) do
     socket = conf[:socket]
-    :ok = BoltProtocol.goodbye(socket, sock, conn_data.bolt_version)
+    BoltProtocol.goodbye(socket, sock, conn_data.bolt_version)
     socket.close(sock)
 
     :ok

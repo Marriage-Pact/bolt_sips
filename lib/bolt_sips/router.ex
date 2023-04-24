@@ -288,9 +288,12 @@ defmodule Bolt.Sips.Router do
         end
 
       with(
-        {:ok, pid} <- DBConnection.start_link(Protocol, Keyword.delete(opts, :name)),
-        {:ok, %Response{} = results} <- Bolt.Sips.query(pid, query, params),
-        true <- Process.exit(pid, :normal)
+        _ <- Logger.info("[Bolt.Sips] connecting to root URL to query routing table. Current opts: #{inspect(opts)}"),
+        {:ok, conn} <- DBConnection.start_link(Protocol, Keyword.delete(opts, :name)),
+        _ <- Logger.info("[Bolt.Sips] querying routing table with connection: #{if is_struct(conn), do: conn |> Map.from_struct() |> inspect(), else: inspect(conn)}"),
+        {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, params),
+        _ <- Logger.info("[Bolt.Sips] closing connection after query"),
+        true <- Process.exit(conn, :normal)
       )
       do
         table =
