@@ -63,6 +63,7 @@ defmodule Bolt.Sips.Router do
   @impl true
   @spec init(Keyword.t()) :: {:ok, State.t(), {:continue, :post_init}}
   def init(options) do
+    Process.flag(:trap_exit, true)
     {:ok, options, {:continue, :post_init}}
   end
 
@@ -203,6 +204,13 @@ defmodule Bolt.Sips.Router do
     {:noreply, state}
   end
 
+  # Special handler so we can disconnect DBConnection processes without leaking
+  # connections or cascading the error to a full driver crash
+  @impl true
+  def handle_info({:EXIT, _from_pid, :kill_dbconnection}, state) do
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(req, state) do
     Logger.warn("Router received an unexpected message: #{inspect(req)}")
@@ -274,8 +282,8 @@ defmodule Bolt.Sips.Router do
     prefix = Keyword.get(opts, :prefix, :default)
 
     with(
-      {:ok, %Protocol.ConnData{configuration: configuration}} <- Protocol.connect(opts),
-      # DON'T>  :ok <- Protocol.disconnect(:stop, conn),
+      {:ok, %Protocol.ConnData{configuration: configuration} = protocol_conn} <- Protocol.connect(opts),
+      :ok <- Protocol.disconnect(:stop, protocol_conn),
       {_long, short} <- parse_server_version(configuration[:server_version])
     )
     do
@@ -293,7 +301,7 @@ defmodule Bolt.Sips.Router do
         _ <- Logger.info("[Bolt.Sips] querying routing table with connection: #{if is_struct(conn), do: conn |> Map.from_struct() |> inspect(), else: inspect(conn)}"),
         {:ok, %Response{} = results} <- Bolt.Sips.query(conn, query, params),
         _ <- Logger.info("[Bolt.Sips] closing connection after query"),
-        true <- Process.exit(conn, :normal)
+        true <- Process.exit(conn, :kill_dbconnection)
       )
       do
         table =
