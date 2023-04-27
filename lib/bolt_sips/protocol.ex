@@ -156,7 +156,12 @@ defmodule Bolt.Sips.Protocol do
 
   ### Calming the warnings
   # Callbacks for ...
-  def ping(state), do: {:ok, state}
+  def ping(conn_data) do
+    case handle_execute(%QueryStatement{statement: "CALL db.ping()"}, %{}, [], conn_data) do
+      {:ok, _, _, _} -> {:ok, conn_data}
+      err -> err
+    end
+  end
   def handle_prepare(query, _opts, state), do: {:ok, query, state}
   def handle_close(query, _opts, state), do: {:ok, query, state}
   def handle_deallocate(query, _cursor, _opts, state), do: {:ok, query, state}
